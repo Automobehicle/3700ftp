@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+import json
+import sys
+import argparse
+import socket
+from urllib.parse import urlparse
+
+
+# Default settings for the Command Socket
+HOST = 'ftp.3700.network'
+PORT = 21
+BUFFER = 1024
+
+
+# Setting up the argument parser
+parser = argparse.ArgumentParser()
+parser.add_argument("operation", type=str)
+parser.add_argument("params", type=str, nargs='+')
+# parser.add_argument("param2", action="store_true", required=False)
+args = parser.parse_args()
+
+if args.operation:
+    currentCommand = args.operation
+
+if args.params:
+    paths = []
+    for x in args.params:
+        paths.append(urlparse(x))
+        print(paths)
+
+# if args.param2:
+#    altPath = urlparse(args.param2)
+
+def openDataChannel():
+    commandSock.sendall("PASV\r\n".encode())
+    returnData = commandSock.recv(BUFFER).decode()
+    print(returnData)
+
+    numbers = returnData.split("(")[1]
+    numbers = numbers.split(")")[0]
+    numbers = numbers.split(",")
+    dataIp = ""
+
+    for x in range(4):
+        if x == 3:
+            dataIp += numbers[x]
+        else:
+            dataIp += numbers[x] + "."
+
+    dataPort = (int(numbers[4]) << 8) + int(numbers[5])
+    dataAddress = (dataIp, dataPort)
+
+    try:
+        dataSock.connect(dataAddress)
+
+    except:
+        print("Somewhere along the line, we fucked up")
+
+
+def sendCommand(command, dataNeeded):
+    commandSock.sendall(command.encode())
+    if dataNeeded:
+        sentback = dataSock.recv(BUFFER).decode()
+        while '\r\n' not in sentback:
+            sentback = sentback + dataSock.recv(BUFFER).decode()
+    else:
+        sentback = commandSock.recv(BUFFER).decode()
+        while '\r\n' not in sentback:
+            sentback = sentback + commandSock.recv(BUFFER).decode()
+
+    print(sentback)
+
+
+def uploadData(command, data):
+    commandSock.sendall(command.encode())
+    dataSock.sendall(data.encode())
+    sentback = commandSock.recv(BUFFER).decode()
+    while '\r\n' not in sentback:
+        sentback = sentback + commandSock.recv(BUFFER).decode()
+
+    print(sentback)
+    dataSock.close()
+
+
+def downloadData(command, destination):
+    commandSock.sendall(command.encode())
+    sentback = dataSock.recv(BUFFER).decode()
+    destination.write(sentback)
+    dataSock.close()
+
+def setupConnection():
+    commands = ["USER narinek\r\n", "PASS yboMCqKhTG8zdWv0jDBL\r\n",
+                "TYPE I\r\n", "MODE S\r\n", "STRU F\r\n"]
+
+    for x in commands:
+        sendCommand(x, False)
+
+
+def determineCommand(operation, urls):
+    if operation == "mkdir":
+        sendCommand("MKD " + urls[0].path + "\r\n", False)
+    elif operation == "rmdir":
+        sendCommand("RMD " + urls[0].path + "\r\n", False)
+    elif operation == "rm":
+        sendCommand("DELE " + urls[0].path + "\r\n", False)
+    elif operation == "ls":
+        openDataChannel();
+        sendCommand("LIST " + urls[0].path + "\r\n", True)
+    elif operation == "cp":
+        openDataChannel()
+        if urls[0].scheme == "ftp":
+            f = open(urls[1].path, "a")
+            downloadData("RETR " + urls[0].path + "\r\n", f)
+        else:
+            f = open(urls[0].path, "r")
+            uploadData("STOR " + urls[1].path + "\r\n", f.read())
+    else:
+        print("Please enter a valid command")
+
+
+# Setting up the socket
+commandSock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+dataSock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+ADDRESS = (HOST, PORT)
+
+try:
+    commandSock.connect(ADDRESS)
+    print(commandSock.recv(BUFFER).decode())
+
+except:
+    print("Connection Error")
+
+
+# Sending the command
+setupConnection()
+determineCommand(currentCommand, paths)
+
+
